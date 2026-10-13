@@ -4,19 +4,18 @@ Publica posts aleatorios de Gelbooru (imágenes y videos) en uno o varios canale
 de Discord mediante webhooks. Pensado para ejecutarse cada 5 minutos con
 GitHub Actions.
 
-Configuración
--------------
-Los canales se definen en `channels.json` (tags, rating, tamaño máximo). Las URLs
-de los webhooks NO van en ese archivo: cada canal indica en `webhook_env` el nombre
-del secret/variable de entorno que contiene su URL.
+Los canales se definen en `channels.json` (name, webhook_env, tags, rating,
+max_upload_mb, enabled). Las URLs de los webhooks van en secrets; cada canal
+indica en `webhook_env` el nombre del secret.
 
 Variables de entorno
 --------------------
-DISCORD_WEBHOOK_1, DISCORD_WEBHOOK_2, …   URLs de webhook (las que cites en channels.json).
-GELBOORU_LOGIN / GELBOORU_API_KEY           (opcionales) Tu cuenta de Gelbooru.
-CHANNELS_FILE                               Ruta del JSON de canales. Por defecto: channels.json
-STATE_FILE                                  Historial de posts enviados. Por defecto: state/posted.json
-DRY_RUN                                     "1" para buscar y mostrar sin enviar a Discord ni guardar historial.
+DISCORD_WEBHOOK_1, DISCORD_WEBHOOK_2, …  URLs de webhook (las que cites en channels.json).
+GELBOORU_LOGIN      Tu user_id numérico de Gelbooru (Opciones de cuenta).
+GELBOORU_API_KEY    Tu api_key de Gelbooru (Opciones de cuenta).
+CHANNELS_FILE       Por defecto: channels.json
+STATE_FILE          Por defecto: state/posted.json
+DRY_RUN             "1" para buscar y mostrar sin enviar a Discord ni guardar historial.
 """
 
 from __future__ import annotations
@@ -33,16 +32,19 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 GELBOORU = "https://gelbooru.com"
-USER_AGENT = "gelbooru-discord-webhook/2.0 (GitHub Actions)"
+USER_AGENT = "Mozilla/5.0 (compatible; gelbooru-discord-webhook/3.0)"
 
 IMAGE_EXTS = {"jpg", "jpeg", "png", "gif", "webp", "avif"}
 VIDEO_EXTS = {"mp4", "webm"}
 MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS
 
-BATCH_SIZE = 40         # posts aleatorios que se piden por consulta
-MAX_QUERIES = 3         # consultas a Gelbooru por canal antes de rendirse
-MAX_POSTS_TRIED = 10    # posts que se intentan descargar/enviar por canal
-MAX_HISTORY = 5000      # IDs recordados por canal
+# En Gelbooru el rating se escribe con la palabra completa.
+RATINGS = {"g": "general", "s": "sensitive", "q": "questionable", "e": "explicit"}
+
+BATCH_SIZE = 40
+MAX_QUERIES = 3
+MAX_POSTS_TRIED = 10
+MAX_HISTORY = 5000
 
 
 class ConfigError(Exception):
@@ -53,15 +55,14 @@ class WebhookError(Exception):
     """El webhook es inválido o fue eliminado: no tiene sentido reintentar."""
 
 
-# --------------------------------------------------------------------------- #
-# Utilidades y configuración
-# --------------------------------------------------------------------------- #
 def env(name: str, default: str = "") -> str:
-    """Lee una variable de entorno; vacía o ausente devuelve el valor por defecto."""
     value = os.environ.get(name, "").strip()
     return value or default
 
 
+# --------------------------------------------------------------------------- #
+# Configuración
+# --------------------------------------------------------------------------- #
 def load_channels(path: Path) -> list[dict]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -100,14 +101,14 @@ def build_query(channel: dict) -> str:
     tags = str(channel.get("tags") or "").strip()
     rating = str(channel.get("rating") or "").strip().lower()
     parts = [tags] if tags else []
-    # `rating:` es un metatag gratuito: no cuenta para el límite de tags de Gelbooru.
     if rating and rating not in ("any", "all", "none"):
-        parts.append(f"rating:{rating}")
+        parts.append(f"rating:{RATINGS.get(rating, rating)}")
+    parts.append("sort:random")
     return " ".join(parts)
 
 
 # --------------------------------------------------------------------------- #
-# Historial de posts enviados
+# Historial
 # --------------------------------------------------------------------------- #
 def load_state(path: Path) -> dict[str, list[int]]:
     try:
@@ -124,7 +125,7 @@ def save_state(path: Path, state: dict[str, list[int]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
-    tmp.replace(path)  # escritura atómica
+    tmp.replace(path)
 
 
 # --------------------------------------------------------------------------- #
@@ -140,84 +141,69 @@ def gelbooru_session() -> requests.Session:
         allowed_methods=("GET",),
     )
     session.mount("https://", HTTPAdapter(max_retries=retry))
-    login, api_key = env("GELBOORU_LOGIN"), env("GELBOORU_API_KEY")
-    if login and api_key:
-        session.auth = (login, api_key)
-    elif login or api_key:
-        print("Aviso: hay que definir GELBOORU_LOGIN y GELBOORU_API_KEY juntos; se ignoran.")
     return session
 
 
-def check_account(session: requests.Session) -> bool:
-    """Si hay credenciales, comprueba que funcionan. Devuelve False si son inválidas."""
-    if not session.auth:
-        print("Gelbooru: sin cuenta (búsquedas anónimas).")
-        return True
-    try:
-        response = session.get(f"{GELBOORU}/profile.json", timeout=30)
-    except requests.RequestException as exc:
-        print(f"Aviso: no se pudo verificar la cuenta de Gelbooru ({exc}).")
-        return True
-    if response.status_code in (401, 403):
-        print(
-            "Las credenciales de Gelbooru no son válidas. Revisa los secrets "
-            "GELBOORU_LOGIN (tu nombre de usuario) y GELBOORU_API_KEY.",
-            file=sys.stderr,
-        )
-        return False
-    if response.ok:
-        profile = response.json()
-        print(f"Gelbooru: sesión iniciada como {profile.get('name')} ({profile.get('level_string')}).")
-    return True
+def auth_params() -> dict:
+    """Gelbooru autentica con user_id + api_key como parámetros de la URL."""
+    user_id, api_key = env("GELBOORU_LOGIN"), env("GELBOORU_API_KEY")
+    if user_id and api_key:
+        return {"user_id": user_id, "api_key": api_key}
+    if user_id or api_key:
+        print("Aviso: hay que definir GELBOORU_LOGIN y GELBOORU_API_KEY juntos; se ignoran.")
+    else:
+        print("Gelbooru: sin credenciales (la API puede exigirlas).")
+    return {}
 
 
-def fetch_random_posts(session: requests.Session, query: str) -> list[dict]:
+def fetch_random_posts(session: requests.Session, query: str, auth: dict) -> list[dict]:
     response = session.get(
-        f"{GELBOORU}/posts.json",
-        params={"tags": query, "limit": BATCH_SIZE, "random": "true"},
+        f"{GELBOORU}/index.php",
+        params={
+            "page": "dapi", "s": "post", "q": "index", "json": 1,
+            "tags": query, "limit": BATCH_SIZE, **auth,
+        },
         timeout=30,
     )
     if not response.ok:
-        hint = ""
-        if response.status_code == 422:
-            hint = " (¿demasiados tags para el tipo de cuenta de Gelbooru?)"
-        raise RuntimeError(f"Gelbooru respondió {response.status_code}{hint}: {response.text[:300]}")
-    data = response.json()
+        raise RuntimeError(f"Gelbooru respondió {response.status_code}: {response.text[:300]}")
+    try:
+        data = response.json()
+    except ValueError:
+        # Normalmente es una página HTML (bloqueo de Cloudflare o credenciales rechazadas).
+        raise RuntimeError(f"Gelbooru no devolvió JSON: {response.text[:300]!r}")
+    if isinstance(data, dict):
+        if "post" not in data:  # sin resultados, o mensaje de error de la API
+            message = data.get("message") or data.get("error")
+            if message:
+                raise RuntimeError(f"Gelbooru: {message}")
+            return []
+        data = data["post"]
+        if isinstance(data, dict):  # un solo resultado
+            data = [data]
     return data if isinstance(data, list) else []
 
 
+def normalize(post: dict) -> dict:
+    """Adapta un post de Gelbooru a los campos que usa el resto del script."""
+    file_url = (post.get("file_url") or "").strip()
+    ext = file_url.rsplit(".", 1)[-1].lower().split("?")[0] if "." in file_url else ""
+    sample = (post.get("sample_url") or "").strip()
+    return {
+        "id": int(post["id"]),
+        "file_url": file_url,
+        "file_ext": ext,
+        "sample_url": sample if sample and sample != file_url else "",
+        "deleted": post.get("status") == "deleted",
+    }
+
+
 def is_usable(post: dict) -> bool:
-    """Descarta posts borrados/baneados, sin URL pública o con formatos no soportados."""
-    if post.get("is_deleted") or post.get("is_banned"):
-        return False
-    ext = (post.get("file_ext") or "").lower()
-    if ext == "zip":  # ugoira: la versión "large" es un webm
-        return bool(post.get("large_file_url"))
-    return bool(post.get("file_url")) and ext in MEDIA_EXTS
-
-
-def choose_media(post: dict, max_bytes: int) -> Optional[tuple[str, str]]:
-    """
-    Devuelve (url, extensión) del archivo a subir, o None si no cabe en el límite.
-    Para imágenes pesadas usa la versión "large" (reducida) de Gelbooru.
-    """
-    ext = (post.get("file_ext") or "").lower()
-    file_url = post.get("file_url")
-    large_url = post.get("large_file_url")
-    size = post.get("file_size") or 0
-
-    if ext == "zip":
-        return (large_url, "webm") if large_url else None
-    if size <= max_bytes:
-        return file_url, ext
-    if ext in IMAGE_EXTS and large_url and large_url != file_url:
-        return large_url, large_url.rsplit(".", 1)[-1].lower()
-    return None
+    return not post["deleted"] and bool(post["file_url"]) and post["file_ext"] in MEDIA_EXTS
 
 
 def download(url: str, max_bytes: int) -> Optional[bytes]:
     """Descarga el archivo; devuelve None si supera max_bytes."""
-    # Sin credenciales: el CDN no las necesita.
     with requests.get(url, headers={"User-Agent": USER_AGENT}, stream=True, timeout=120) as r:
         r.raise_for_status()
         buffer = bytearray()
@@ -228,53 +214,27 @@ def download(url: str, max_bytes: int) -> Optional[bytes]:
         return bytes(buffer)
 
 
-def clean(tag_string: str, limit: int = 3) -> str:
-    tags = [t.replace("_", " ") for t in (tag_string or "").split() if t]
-    shown = ", ".join(tags[:limit])
-    if len(tags) > limit:
-        shown += f" (+{len(tags) - limit})"
-    return shown
-
-
 def build_caption(post: dict) -> str:
-    lines = []
-    artist = clean(post.get("tag_string_artist"))
-    character = clean(post.get("tag_string_character"))
-    if artist:
-        lines.append(f"**Artista:** {artist}")
-    if character:
-        lines.append(f"**Personaje:** {character}")
     # Los <> evitan que Discord genere una vista previa duplicada del enlace.
-    lines.append(f"<{GELBOORU}/posts/{post['id']}>")
-    return "\n".join(lines)[:1900]
+    return f"<{GELBOORU}/index.php?page=post&s=view&id={post['id']}>"
 
 
 # --------------------------------------------------------------------------- #
 # Discord
 # --------------------------------------------------------------------------- #
-def send_to_discord(
-    webhook_url: str,
-    content: str,
-    filename: Optional[str] = None,
-    data: Optional[bytes] = None,
-) -> requests.Response:
+def send_to_discord(webhook_url, content, filename=None, data=None) -> requests.Response:
     payload = {"content": content, "allowed_mentions": {"parse": []}}
-
     for _ in range(4):
         if data is not None:
             response = requests.post(
-                webhook_url,
-                params={"wait": "true"},
+                webhook_url, params={"wait": "true"},
                 data={"payload_json": json.dumps(payload)},
-                files={"files[0]": (filename, data)},
-                timeout=120,
+                files={"files[0]": (filename, data)}, timeout=120,
             )
         else:
-            response = requests.post(
-                webhook_url, params={"wait": "true"}, json=payload, timeout=30
-            )
+            response = requests.post(webhook_url, params={"wait": "true"}, json=payload, timeout=30)
 
-        if response.status_code == 429:  # rate limit: esperar lo que pida Discord
+        if response.status_code == 429:
             try:
                 wait = float(response.json().get("retry_after", 2))
             except ValueError:
@@ -283,7 +243,6 @@ def send_to_discord(
             time.sleep(min(wait, 30))
             continue
         return response
-
     return response
 
 
@@ -295,23 +254,22 @@ def check_webhook(response: requests.Response) -> None:
 
 
 def publish(webhook_url: str, post: dict, max_bytes: int, dry_run: bool, label: str) -> bool:
-    """Intenta publicar un post. Devuelve True si quedó publicado (o simulado)."""
-    post_id = post["id"]
+    post_id, ext = post["id"], post["file_ext"]
     caption = build_caption(post)
-    media = choose_media(post, max_bytes)
 
     payload_file: Optional[tuple[str, bytes]] = None
-    if media:
-        url, ext = media
-        content = download(url, max_bytes)
-        if content is not None:
-            payload_file = (f"gelbooru_{post_id}.{ext}", content)
+    content = download(post["file_url"], max_bytes)
+    if content is None and ext in IMAGE_EXTS and post["sample_url"]:
+        # Imagen demasiado pesada: se usa la versión reducida.
+        sample_ext = post["sample_url"].rsplit(".", 1)[-1].lower()
+        content, ext = download(post["sample_url"], max_bytes), sample_ext
+    if content is not None:
+        payload_file = (f"gelbooru_{post_id}.{ext}", content)
 
     if dry_run:
         kind = (
             f"archivo {payload_file[0]} ({len(payload_file[1]) / 1e6:.2f} MB)"
-            if payload_file
-            else "solo enlace"
+            if payload_file else "solo enlace"
         )
         print(f"[{label}] [DRY_RUN] post #{post_id} → {kind}\n{caption}")
         return True
@@ -328,12 +286,7 @@ def publish(webhook_url: str, post: dict, max_bytes: int, dry_run: bool, label: 
             print(f"[{label}] Publicado post #{post_id} como archivo ({payload_file[0]}).")
             return True
 
-    # Sin archivo (demasiado grande o rechazado): se publica el enlace directo al
-    # medio para que Discord lo incruste, más la página del post.
-    direct = (post.get("file_url") or post.get("large_file_url") or "").strip()
-    page_link = f"{GELBOORU}/posts/{post_id}"
-    fallback = f"{caption}\n{direct}" if direct else f"{caption}\n{page_link}"
-    response = send_to_discord(webhook_url, fallback)
+    response = send_to_discord(webhook_url, f"{caption}\n{post['file_url']}")
     check_webhook(response)
     if not response.ok:
         print(f"[{label}] Discord respondió {response.status_code}: {response.text[:300]}")
@@ -345,16 +298,7 @@ def publish(webhook_url: str, post: dict, max_bytes: int, dry_run: bool, label: 
 # --------------------------------------------------------------------------- #
 # Lógica por canal
 # --------------------------------------------------------------------------- #
-def post_to_channel(
-    session: requests.Session,
-    channel: dict,
-    history: list[int],
-    dry_run: bool,
-) -> tuple[bool, list[int]]:
-    """
-    Publica un post nuevo en el canal. Devuelve (publicado, historial_actualizado).
-    Si ya se enviaron todos los posts que cumplen la búsqueda, reinicia el historial.
-    """
+def post_to_channel(session, channel, history, dry_run, auth) -> tuple[bool, list[int]]:
     label = channel["name"]
     query = build_query(channel)
     max_bytes = int(float(channel["max_upload_mb"]) * 1024 * 1024)
@@ -362,23 +306,24 @@ def post_to_channel(
     webhook_url = env(channel["webhook_env"])
     if not webhook_url and not dry_run:
         print(
-            f"[{label}] Falta el secret/variable {channel['webhook_env']} con la URL del webhook.",
+            f"[{label}] Falta el secret {channel['webhook_env']} con la URL del webhook "
+            "(revisa que el nombre coincida con 'webhook_env' en channels.json y con el workflow).",
             file=sys.stderr,
         )
         return False, history
 
-    print(f"[{label}] Buscando: {query or '(sin tags)'}")
+    print(f"[{label}] Buscando: {query}")
     seen = set(history)
     tried = 0
     last_usable: list[dict] = []
 
     for _ in range(MAX_QUERIES):
-        posts = fetch_random_posts(session, query)
-        if not posts:
+        raw_posts = fetch_random_posts(session, query, auth)
+        if not raw_posts:
             print(f"[{label}] La búsqueda no devolvió resultados. Revisa los tags/rating.", file=sys.stderr)
             return False, history
 
-        usable = [p for p in posts if is_usable(p)]
+        usable = [p for p in map(normalize, raw_posts) if is_usable(p)]
         last_usable = usable
         for post in (p for p in usable if p["id"] not in seen):
             if tried >= MAX_POSTS_TRIED:
@@ -388,12 +333,12 @@ def post_to_channel(
                 if publish(webhook_url, post, max_bytes, dry_run, label):
                     return True, (history + [post["id"]])[-MAX_HISTORY:]
             except requests.RequestException as exc:
-                print(f"[{label}] Fallo con el post #{post.get('id')}: {exc}")
+                print(f"[{label}] Fallo con el post #{post['id']}: {exc}")
 
         if tried:
-            break  # había posts nuevos pero no se pudo publicar ninguno: no reiniciar
-        if len(posts) < BATCH_SIZE:
-            break  # ya se recibió todo el conjunto de resultados
+            break
+        if len(raw_posts) < BATCH_SIZE:
+            break
 
     if tried == 0 and last_usable:
         print(f"[{label}] Ya se enviaron todos los posts disponibles; reinicio el historial.")
@@ -402,7 +347,7 @@ def post_to_channel(
                 if publish(webhook_url, post, max_bytes, dry_run, label):
                     return True, [post["id"]]
             except requests.RequestException as exc:
-                print(f"[{label}] Fallo con el post #{post.get('id')}: {exc}")
+                print(f"[{label}] Fallo con el post #{post['id']}: {exc}")
 
     print(f"[{label}] No se pudo publicar ningún post en esta ejecución.", file=sys.stderr)
     return False, history
@@ -423,9 +368,7 @@ def main() -> int:
         return 1
 
     session = gelbooru_session()
-    if not check_account(session):
-        return 1
-
+    auth = auth_params()
     state = load_state(state_path)
     failures = 0
 
@@ -434,7 +377,7 @@ def main() -> int:
         if index:
             time.sleep(1)
         try:
-            ok, history = post_to_channel(session, channel, state.get(label, []), dry_run)
+            ok, history = post_to_channel(session, channel, state.get(label, []), dry_run, auth)
         except WebhookError as exc:
             print(f"[{label}] {exc}", file=sys.stderr)
             ok, history = False, state.get(label, [])
@@ -444,7 +387,7 @@ def main() -> int:
 
         if ok and not dry_run:
             state[label] = history
-            save_state(state_path, state)  # se guarda tras cada canal
+            save_state(state_path, state)
         failures += 0 if ok else 1
 
     if failures:

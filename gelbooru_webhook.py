@@ -12,7 +12,7 @@ del secret/variable de entorno que contiene su URL.
 
 Variables de entorno
 --------------------
-DISCORD_WEBHOOK_URL, DISCORD_WEBHOOK_2, …   URLs de webhook (las que cites en channels.json).
+DISCORD_WEBHOOK_1, DISCORD_WEBHOOK_2, …   URLs de webhook (las que cites en channels.json).
 GELBOORU_LOGIN / GELBOORU_API_KEY           (opcionales) Tu cuenta de Danbooru.
 CHANNELS_FILE                               Ruta del JSON de canales. Por defecto: channels.json
 STATE_FILE                                  Historial de posts enviados. Por defecto: state/posted.json

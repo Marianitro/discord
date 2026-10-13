@@ -44,7 +44,7 @@ jobs:
         env:
           # Un secret por canal. Cada nombre debe coincidir con el "webhook_env"
           # del canal en channels.json. Para más de 5 canales, añade más líneas.
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_1: ${{ secrets.DISCORD_WEBHOOK_1 }}
           DISCORD_WEBHOOK_2: ${{ secrets.DISCORD_WEBHOOK_2 }}
           DISCORD_WEBHOOK_3: ${{ secrets.DISCORD_WEBHOOK_3 }}
           DISCORD_WEBHOOK_4: ${{ secrets.DISCORD_WEBHOOK_4 }}

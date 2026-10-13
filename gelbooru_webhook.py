@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Publica posts aleatorios de Danbooru (imágenes y videos) en uno o varios canales
+Publica posts aleatorios de Gelbooru (imágenes y videos) en uno o varios canales
 de Discord mediante webhooks. Pensado para ejecutarse cada 5 minutos con
 GitHub Actions.
 
@@ -13,7 +13,7 @@ del secret/variable de entorno que contiene su URL.
 Variables de entorno
 --------------------
 DISCORD_WEBHOOK_1, DISCORD_WEBHOOK_2, …   URLs de webhook (las que cites en channels.json).
-GELBOORU_LOGIN / GELBOORU_API_KEY           (opcionales) Tu cuenta de Danbooru.
+GELBOORU_LOGIN / GELBOORU_API_KEY           (opcionales) Tu cuenta de Gelbooru.
 CHANNELS_FILE                               Ruta del JSON de canales. Por defecto: channels.json
 STATE_FILE                                  Historial de posts enviados. Por defecto: state/posted.json
 DRY_RUN                                     "1" para buscar y mostrar sin enviar a Discord ni guardar historial.
@@ -40,7 +40,7 @@ VIDEO_EXTS = {"mp4", "webm"}
 MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS
 
 BATCH_SIZE = 40         # posts aleatorios que se piden por consulta
-MAX_QUERIES = 3         # consultas a Danbooru por canal antes de rendirse
+MAX_QUERIES = 3         # consultas a Gelbooru por canal antes de rendirse
 MAX_POSTS_TRIED = 10    # posts que se intentan descargar/enviar por canal
 MAX_HISTORY = 5000      # IDs recordados por canal
 
@@ -100,7 +100,7 @@ def build_query(channel: dict) -> str:
     tags = str(channel.get("tags") or "").strip()
     rating = str(channel.get("rating") or "").strip().lower()
     parts = [tags] if tags else []
-    # `rating:` es un metatag gratuito: no cuenta para el límite de tags de Danbooru.
+    # `rating:` es un metatag gratuito: no cuenta para el límite de tags de Gelbooru.
     if rating and rating not in ("any", "all", "none"):
         parts.append(f"rating:{rating}")
     return " ".join(parts)
@@ -128,7 +128,7 @@ def save_state(path: Path, state: dict[str, list[int]]) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Danbooru
+# Gelbooru
 # --------------------------------------------------------------------------- #
 def gelbooru_session() -> requests.Session:
     session = requests.Session()
@@ -151,23 +151,23 @@ def gelbooru_session() -> requests.Session:
 def check_account(session: requests.Session) -> bool:
     """Si hay credenciales, comprueba que funcionan. Devuelve False si son inválidas."""
     if not session.auth:
-        print("Danbooru: sin cuenta (búsquedas anónimas).")
+        print("Gelbooru: sin cuenta (búsquedas anónimas).")
         return True
     try:
         response = session.get(f"{GELBOORU}/profile.json", timeout=30)
     except requests.RequestException as exc:
-        print(f"Aviso: no se pudo verificar la cuenta de Danbooru ({exc}).")
+        print(f"Aviso: no se pudo verificar la cuenta de Gelbooru ({exc}).")
         return True
     if response.status_code in (401, 403):
         print(
-            "Las credenciales de Danbooru no son válidas. Revisa los secrets "
+            "Las credenciales de Gelbooru no son válidas. Revisa los secrets "
             "GELBOORU_LOGIN (tu nombre de usuario) y GELBOORU_API_KEY.",
             file=sys.stderr,
         )
         return False
     if response.ok:
         profile = response.json()
-        print(f"Danbooru: sesión iniciada como {profile.get('name')} ({profile.get('level_string')}).")
+        print(f"Gelbooru: sesión iniciada como {profile.get('name')} ({profile.get('level_string')}).")
     return True
 
 
@@ -180,8 +180,8 @@ def fetch_random_posts(session: requests.Session, query: str) -> list[dict]:
     if not response.ok:
         hint = ""
         if response.status_code == 422:
-            hint = " (¿demasiados tags para el tipo de cuenta de Danbooru?)"
-        raise RuntimeError(f"Danbooru respondió {response.status_code}{hint}: {response.text[:300]}")
+            hint = " (¿demasiados tags para el tipo de cuenta de Gelbooru?)"
+        raise RuntimeError(f"Gelbooru respondió {response.status_code}{hint}: {response.text[:300]}")
     data = response.json()
     return data if isinstance(data, list) else []
 
@@ -199,7 +199,7 @@ def is_usable(post: dict) -> bool:
 def choose_media(post: dict, max_bytes: int) -> Optional[tuple[str, str]]:
     """
     Devuelve (url, extensión) del archivo a subir, o None si no cabe en el límite.
-    Para imágenes pesadas usa la versión "large" (reducida) de Danbooru.
+    Para imágenes pesadas usa la versión "large" (reducida) de Gelbooru.
     """
     ext = (post.get("file_ext") or "").lower()
     file_url = post.get("file_url")

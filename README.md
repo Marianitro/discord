@@ -1,6 +1,6 @@
-# Danbooru → Discord (cada 5 minutos, con GitHub Actions)
+# Gelbooru → Discord (cada 5 minutos, con GitHub Actions)
 
-Cada 5 minutos, un workflow de GitHub Actions pide a la API pública de Danbooru un
+Cada 5 minutos, un workflow de GitHub Actions pide a la API pública de Gelbooru un
 post aleatorio (imagen o video) **por cada canal configurado** y lo envía por webhook
 a Discord. Cada canal tiene sus propios tags y recuerda lo que ya envió para no repetir.
 
@@ -20,10 +20,10 @@ a Discord. Cada canal tiene sus propios tags y recuerda lo que ya envió para no
 2. **Crea un repositorio público en GitHub** y sube estos archivos.
    (Público = minutos de Actions gratis e ilimitados.)
 3. En **Settings → Secrets and variables → Actions → Secrets**, crea el secret
-   `DISCORD_WEBHOOK_URL` con la URL copiada.
+   `DISCORD_WEBHOOK_1` con la URL copiada.
 4. Edita `channels.json` y pon tus tags en el primer canal (`"tags": "scenery"` es solo
    un ejemplo).
-5. En la pestaña **Actions**, abre *Danbooru a Discord* y pulsa **Run workflow** para
+5. En la pestaña **Actions**, abre *Gelbooru a Discord* y pulsa **Run workflow** para
    probarlo. A partir de ahí se ejecuta solo.
 
 > No pegues la URL de un webhook en el código ni en `channels.json`: quien la tenga
@@ -63,14 +63,14 @@ a Discord. Cada canal tiene sus propios tags y recuerda lo que ya envió para no
 Los valores de `defaults` se aplican a todos los canales y cada canal puede
 sobrescribirlos. Cada ejecución publica **un post por canal**.
 
-## Usar tu cuenta de Danbooru
+## Usar tu cuenta de Gelbooru
 
 1. Entra a tu perfil en <https://gelbooru.com/profile> y pulsa **Generate API key**.
 2. En el repositorio, ve a Settings → Secrets and variables → Actions → Secrets y crea:
-   - `GELBOORU_LOGIN`: tu nombre de usuario de Danbooru.
+   - `GELBOORU_LOGIN`: tu nombre de usuario de Gelbooru.
    - `GELBOORU_API_KEY`: la clave generada.
 3. Lanza el workflow a mano y revisa el log: si todo va bien aparece
-   `Danbooru: sesión iniciada como <tu usuario> (<nivel>)`. Si las credenciales
+   `Gelbooru: sesión iniciada como <tu usuario> (<nivel>)`. Si las credenciales
    fallan, el log lo indica.
 
 La API key funciona como una contraseña: guárdala solo como *secret*.
@@ -129,5 +129,5 @@ pip install -r requirements.txt
 DRY_RUN=1 python gelbooru_webhook.py
 
 # Envío real (una variable por cada "webhook_env" de channels.json):
-DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..." python gelbooru_webhook.py
+DISCORD_WEBHOOK_1="https://discord.com/api/webhooks/..." python gelbooru_webhook.py
 ```

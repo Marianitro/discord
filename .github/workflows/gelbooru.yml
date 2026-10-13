@@ -1,4 +1,4 @@
-name: Danbooru a Discord
+name: Gelbooru a Discord
 
 on:
   schedule:
@@ -49,7 +49,7 @@ jobs:
           DISCORD_WEBHOOK_3: ${{ secrets.DISCORD_WEBHOOK_3 }}
           DISCORD_WEBHOOK_4: ${{ secrets.DISCORD_WEBHOOK_4 }}
           DISCORD_WEBHOOK_5: ${{ secrets.DISCORD_WEBHOOK_5 }}
-          # Cuenta de Danbooru (opcional).
+          # Cuenta de Gelbooru (opcional).
           GELBOORU_LOGIN: ${{ secrets.GELBOORU_LOGIN }}
           GELBOORU_API_KEY: ${{ secrets.GELBOORU_API_KEY }}
         run: python gelbooru_webhook.py

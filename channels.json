@@ -1,6 +1,7 @@
 {
   "defaults": {
-    "rating": "questionable,explicit"
+    "rating": "questionable,explicit",
+    "max_upload_mb": 10
   },
   "channels": [
     {

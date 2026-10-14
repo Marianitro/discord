@@ -9,7 +9,8 @@ enabled). Las URLs de los webhooks van en secrets; cada canal
 indica en `webhook_env` el nombre del secret.
 
 Cada mensaje lleva la imagen incrustada y un texto «Ver en Gelbooru» con el
-enlace oculto (no se sube ningún archivo adjunto).
+enlace oculto. El script descarga el archivo y lo adjunta dentro del propio embed,
+así Discord lo muestra aunque no pueda cargarlo desde Gelbooru.
 
 Variables de entorno
 --------------------
@@ -24,10 +25,12 @@ DRY_RUN             "1" para buscar y mostrar sin enviar a Discord ni guardar hi
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -78,7 +81,7 @@ def load_channels(path: Path) -> list[dict]:
     except ValueError as exc:
         raise ConfigError(f"{path} no es un JSON válido: {exc}")
 
-    defaults = {"rating": "g", "enabled": True}
+    defaults = {"rating": "g", "max_upload_mb": 10, "enabled": True}
     defaults.update(raw.get("defaults", {}))
 
     channels, names = [], set()
@@ -232,12 +235,53 @@ def is_usable(post: dict) -> bool:
     return not post["deleted"] and bool(post["file_url"]) and post["file_ext"] in MEDIA_EXTS
 
 
+def download(url: str, max_bytes: int) -> Optional[bytes]:
+    """Descarga el archivo; devuelve None si supera max_bytes o no se pudo bajar."""
+    try:
+        with requests.get(url, headers={"User-Agent": USER_AGENT}, stream=True, timeout=120) as r:
+            r.raise_for_status()
+            buffer = bytearray()
+            for chunk in r.iter_content(chunk_size=1 << 16):
+                buffer.extend(chunk)
+                if len(buffer) > max_bytes:
+                    return None
+            return bytes(buffer)
+    except requests.RequestException as exc:
+        print(f"No se pudo descargar {url}: {exc}")
+        return None
+
+
+def fetch_media(post: dict, max_bytes: int) -> Optional[tuple[str, bytes]]:
+    """Devuelve (nombre, bytes) del archivo; en imágenes pesadas prueba la versión reducida."""
+    candidates = [post["file_url"]]
+    if post["file_ext"] in IMAGE_EXTS and post["sample_url"]:
+        candidates.append(post["sample_url"])
+    for url in candidates:
+        data = download(url, max_bytes)
+        if data is not None:
+            ext = url.rsplit(".", 1)[-1].lower().split("?")[0]
+            return f"gelbooru_{post['id']}.{ext}", data
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Discord
 # --------------------------------------------------------------------------- #
-def send_to_discord(webhook_url: str, payload: dict) -> requests.Response:
+def send_to_discord(
+    webhook_url: str, payload: dict, attachment: Optional[tuple[str, bytes]] = None
+) -> requests.Response:
     for _ in range(4):
-        response = requests.post(webhook_url, params={"wait": "true"}, json=payload, timeout=30)
+        if attachment:
+            name, data = attachment
+            mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            response = requests.post(
+                webhook_url, params={"wait": "true"},
+                data={"payload_json": json.dumps(payload)},
+                files={"files[0]": (name, data, mime)}, timeout=120,
+            )
+        else:
+            response = requests.post(webhook_url, params={"wait": "true"}, json=payload, timeout=30)
+
         if response.status_code == 429:
             try:
                 wait = float(response.json().get("retry_after", 2))
@@ -262,38 +306,51 @@ def md_url(url: str) -> str:
     return url.replace(" ", "%20").replace("(", "%28").replace(")", "%29")
 
 
-def build_message(post: dict) -> dict:
+def build_message(post: dict, attachment: Optional[str] = None) -> dict:
     """
+    `attachment` es el nombre del archivo que se sube junto al mensaje (o None).
+
     Imágenes: embed con la imagen y debajo el texto «Ver en Gelbooru» (enlace al post).
-    Videos: un embed no puede reproducir video, así que se envía el enlace al archivo
-    oculto tras el mismo texto y Discord lo despliega como reproductor.
+      - con adjunto: la imagen se muestra dentro del embed (attachment://nombre);
+      - sin adjunto: se usa la URL de Gelbooru (Discord tiene que poder cargarla).
+    Videos: un embed no reproduce video. Con adjunto, Discord muestra el reproductor y el
+      texto enlaza al post; sin adjunto, el texto enlaza al archivo y Discord lo despliega.
     """
+    page = f"{GELBOORU}/index.php?page=post&s=view&id={post['id']}"
+    page_link = f"[Ver en Gelbooru]({md_url(page)})"
     payload: dict = {"allowed_mentions": {"parse": []}}
     if post["file_ext"] in IMAGE_EXTS:
-        page = f"{GELBOORU}/index.php?page=post&s=view&id={post['id']}"
-        payload["embeds"] = [{
-            "description": f"[Ver en Gelbooru]({md_url(page)})",
-            "image": {"url": post["file_url"]},
-        }]
+        image_url = f"attachment://{attachment}" if attachment else post["file_url"]
+        payload["embeds"] = [{"description": page_link, "image": {"url": image_url}}]
+    elif attachment:
+        payload["content"] = page_link
     else:
         payload["content"] = f"[Ver en Gelbooru]({md_url(post['file_url'])})"
     return payload
 
 
-def publish(webhook_url: str, post: dict, dry_run: bool, label: str) -> bool:
+def publish(webhook_url: str, post: dict, max_bytes: int, dry_run: bool, label: str) -> bool:
     post_id = post["id"]
-    payload = build_message(post)
+    media = fetch_media(post, max_bytes)
+    payload = build_message(post, media[0] if media else None)
 
     if dry_run:
-        print(f"[{label}] [DRY_RUN] post #{post_id} ({post['file_ext']})\n{json.dumps(payload, ensure_ascii=False)}")
+        kind = f"adjunto {media[0]} ({len(media[1]) / 1e6:.2f} MB)" if media else "solo URL"
+        print(f"[{label}] [DRY_RUN] post #{post_id} → {kind}\n{json.dumps(payload, ensure_ascii=False)}")
         return True
 
-    response = send_to_discord(webhook_url, payload)
+    response = send_to_discord(webhook_url, payload, media)
     check_webhook(response)
+    if media and response.status_code == 413:
+        print(f"[{label}] Discord rechazó el archivo por tamaño (post #{post_id}); envío solo la URL.")
+        media = None
+        response = send_to_discord(webhook_url, build_message(post), None)
+        check_webhook(response)
     if not response.ok:
         print(f"[{label}] Discord respondió {response.status_code}: {response.text[:300]}")
         return False
-    print(f"[{label}] Publicado post #{post_id}.")
+    how = f"con archivo adjunto ({media[0]})" if media else "solo con la URL"
+    print(f"[{label}] Publicado post #{post_id} {how}. Archivo original: {post['file_url']}")
     return True
 
 
@@ -303,6 +360,7 @@ def publish(webhook_url: str, post: dict, dry_run: bool, label: str) -> bool:
 def post_to_channel(session, channel, history, dry_run, auth) -> tuple[bool, list[int]]:
     label = channel["name"]
     query = build_query(channel)
+    max_bytes = int(float(channel["max_upload_mb"]) * 1024 * 1024)
 
     webhook_url = env(channel["webhook_env"])
     if not webhook_url and not dry_run:
@@ -331,7 +389,7 @@ def post_to_channel(session, channel, history, dry_run, auth) -> tuple[bool, lis
                 break
             tried += 1
             try:
-                if publish(webhook_url, post, dry_run, label):
+                if publish(webhook_url, post, max_bytes, dry_run, label):
                     return True, (history + [post["id"]])[-MAX_HISTORY:]
             except requests.RequestException as exc:
                 print(f"[{label}] Fallo con el post #{post['id']}: {exc}")
@@ -345,7 +403,7 @@ def post_to_channel(session, channel, history, dry_run, auth) -> tuple[bool, lis
         print(f"[{label}] Ya se enviaron todos los posts disponibles; reinicio el historial.")
         for post in last_usable[:MAX_POSTS_TRIED]:
             try:
-                if publish(webhook_url, post, dry_run, label):
+                if publish(webhook_url, post, max_bytes, dry_run, label):
                     return True, [post["id"]]
             except requests.RequestException as exc:
                 print(f"[{label}] Fallo con el post #{post['id']}: {exc}")

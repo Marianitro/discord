@@ -17,7 +17,7 @@ permissions:
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -43,12 +43,17 @@ jobs:
       - name: Publicar en Discord
         env:
           # Un secret por canal. Cada nombre debe coincidir con el "webhook_env"
-          # del canal en channels.json. Para más de 5 canales, añade más líneas.
+          # del canal en channels.json. Hay espacio para hasta 10 canales.
           DISCORD_WEBHOOK_1: ${{ secrets.DISCORD_WEBHOOK_1 }}
           DISCORD_WEBHOOK_2: ${{ secrets.DISCORD_WEBHOOK_2 }}
           DISCORD_WEBHOOK_3: ${{ secrets.DISCORD_WEBHOOK_3 }}
           DISCORD_WEBHOOK_4: ${{ secrets.DISCORD_WEBHOOK_4 }}
           DISCORD_WEBHOOK_5: ${{ secrets.DISCORD_WEBHOOK_5 }}
+          DISCORD_WEBHOOK_6: ${{ secrets.DISCORD_WEBHOOK_6 }}
+          DISCORD_WEBHOOK_7: ${{ secrets.DISCORD_WEBHOOK_7 }}
+          DISCORD_WEBHOOK_8: ${{ secrets.DISCORD_WEBHOOK_8 }}
+          DISCORD_WEBHOOK_9: ${{ secrets.DISCORD_WEBHOOK_9 }}
+          DISCORD_WEBHOOK_10: ${{ secrets.DISCORD_WEBHOOK_10 }}
           # Cuenta de Gelbooru (opcional).
           GELBOORU_LOGIN: ${{ secrets.GELBOORU_LOGIN }}
           GELBOORU_API_KEY: ${{ secrets.GELBOORU_API_KEY }}

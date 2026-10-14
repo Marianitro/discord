@@ -7,23 +7,23 @@
     {
       "name": "canal-1",
       "webhook_env": "DISCORD_WEBHOOK_1",
-      "tags": "loli -guro -scat -dakimakura_(medium)",
-      "rating": "questionable,explicit",
+      "tags": "loli -stomach bulge -guro -scat -dakimakura_(medium)",
+      "rating": "general,sensitive",
       "enabled": true
     },
     {
       "name": "canal-2",
       "webhook_env": "DISCORD_WEBHOOK_2",
-      "tags": "loli -guro -scat -dakimakura_(medium)",
-      "rating": "general,sensitive",
+      "tags": "loli -stomach bulge -guro -scat -dakimakura_(medium)",
+      "rating": "questionable,explicit",
       "enabled": true
     },
     {
       "name": "canal-3",
       "webhook_env": "DISCORD_WEBHOOK_3",
-      "tags": "loli furry",
+      "tags": "loli stomach bulge -guro -scat -dakimakura_(medium)",
       "rating": "questionable,explicit",
-      "enabled": false
+      "enabled": true
     },
     {
       "name": "canal-4",

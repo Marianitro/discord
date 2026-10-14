@@ -81,7 +81,7 @@ def load_channels(path: Path) -> list[dict]:
     except ValueError as exc:
         raise ConfigError(f"{path} no es un JSON válido: {exc}")
 
-    defaults = {"rating": "g", "max_upload_mb": 10, "enabled": True}
+    defaults = {"rating": "g", "max_upload_mb": 10, "posts_per_run": 5, "enabled": True}
     defaults.update(raw.get("defaults", {}))
 
     channels, names = [], set()
@@ -97,6 +97,12 @@ def load_channels(path: Path) -> list[dict]:
             continue
         if not channel.get("webhook_env"):
             raise ConfigError(f"El canal '{name}' no tiene 'webhook_env'.")
+        try:
+            channel["posts_per_run"] = int(channel["posts_per_run"])
+        except (TypeError, ValueError):
+            raise ConfigError(f"El canal '{name}': 'posts_per_run' debe ser un número entero.")
+        if not 1 <= channel["posts_per_run"] <= 10:
+            raise ConfigError(f"El canal '{name}': 'posts_per_run' debe estar entre 1 y 10.")
         if isinstance(channel.get("tags"), list):
             channel["tags"] = " ".join(channel["tags"])
         channel["name"] = name
@@ -366,10 +372,20 @@ def publish(webhook_url: str, post: dict, max_bytes: int, dry_run: bool, label: 
 # --------------------------------------------------------------------------- #
 # Lógica por canal
 # --------------------------------------------------------------------------- #
-def post_to_channel(session, channel, history, dry_run, auth) -> tuple[bool, list[int]]:
+def post_to_channel(
+    session, channel, history, dry_run, auth, on_publish=None
+) -> tuple[int, list[int]]:
+    """
+    Publica hasta `posts_per_run` posts nuevos en el canal.
+    Devuelve (cuántos se publicaron, historial actualizado). `on_publish(historial)` se
+    llama tras cada post publicado, para no perder el historial si la ejecución se corta.
+    Si ya se enviaron todos los posts que cumplen la búsqueda, reinicia el historial
+    (solo cuando en esta ejecución todavía no se ha publicado nada).
+    """
     label = channel["name"]
     query = build_query(channel)
     max_bytes = int(float(channel["max_upload_mb"]) * 1024 * 1024)
+    wanted = channel["posts_per_run"]
 
     webhook_url = env(channel["webhook_env"])
     if not webhook_url and not dry_run:
@@ -378,47 +394,59 @@ def post_to_channel(session, channel, history, dry_run, auth) -> tuple[bool, lis
             "(revisa que el nombre coincida con 'webhook_env' en channels.json y con el workflow).",
             file=sys.stderr,
         )
-        return False, history
+        return 0, history
 
-    print(f"[{label}] Buscando: {query}")
+    print(f"[{label}] Buscando: {query} (hasta {wanted} posts)")
+    history = list(history)
     seen = set(history)
-    tried = 0
-    last_usable: list[dict] = []
+    published = attempts = queries = 0
+    max_attempts = wanted + MAX_POSTS_TRIED
+    reset_done = False
 
-    for _ in range(MAX_QUERIES):
+    while published < wanted and queries < MAX_QUERIES and attempts < max_attempts:
         raw_posts = fetch_random_posts(session, query, auth)
+        queries += 1
         if not raw_posts:
             print(f"[{label}] La búsqueda no devolvió resultados. Revisa los tags/rating.", file=sys.stderr)
-            return False, history
+            break
 
         usable = [p for p in map(normalize, raw_posts) if is_usable(p)]
-        last_usable = usable
-        for post in (p for p in usable if p["id"] not in seen):
-            if tried >= MAX_POSTS_TRIED:
+        fresh = [p for p in usable if p["id"] not in seen]
+        if not fresh:
+            # Con menos de BATCH_SIZE resultados (o sin más consultas) ya se vio todo el conjunto.
+            exhausted = len(raw_posts) < BATCH_SIZE or queries >= MAX_QUERIES
+            if published == 0 and attempts == 0 and usable and exhausted and not reset_done:
+                print(f"[{label}] Ya se enviaron todos los posts disponibles; reinicio el historial.")
+                history, seen, reset_done = [], set(), True
+                fresh = usable
+            elif exhausted:
                 break
-            tried += 1
+            else:
+                continue
+
+        for post in fresh:
+            if published >= wanted or attempts >= max_attempts:
+                break
+            attempts += 1
             try:
-                if publish(webhook_url, post, max_bytes, dry_run, label):
-                    return True, (history + [post["id"]])[-MAX_HISTORY:]
+                if not publish(webhook_url, post, max_bytes, dry_run, label):
+                    continue
             except requests.RequestException as exc:
                 print(f"[{label}] Fallo con el post #{post['id']}: {exc}")
+                continue
+            published += 1
+            history = (history + [post["id"]])[-MAX_HISTORY:]
+            seen.add(post["id"])
+            if on_publish:
+                on_publish(history)
+            if published < wanted:
+                time.sleep(1)
 
-        if tried:
-            break
-        if len(raw_posts) < BATCH_SIZE:
-            break
-
-    if tried == 0 and last_usable:
-        print(f"[{label}] Ya se enviaron todos los posts disponibles; reinicio el historial.")
-        for post in last_usable[:MAX_POSTS_TRIED]:
-            try:
-                if publish(webhook_url, post, max_bytes, dry_run, label):
-                    return True, [post["id"]]
-            except requests.RequestException as exc:
-                print(f"[{label}] Fallo con el post #{post['id']}: {exc}")
-
-    print(f"[{label}] No se pudo publicar ningún post en esta ejecución.", file=sys.stderr)
-    return False, history
+    if published == 0:
+        print(f"[{label}] No se pudo publicar ningún post en esta ejecución.", file=sys.stderr)
+    elif published < wanted:
+        print(f"[{label}] Se publicaron {published} de {wanted} posts (no había más posts nuevos o fallaron).")
+    return published, history
 
 
 # --------------------------------------------------------------------------- #
@@ -444,19 +472,23 @@ def main() -> int:
         label = channel["name"]
         if index:
             time.sleep(1)
-        try:
-            ok, history = post_to_channel(session, channel, state.get(label, []), dry_run, auth)
-        except WebhookError as exc:
-            print(f"[{label}] {exc}", file=sys.stderr)
-            ok, history = False, state.get(label, [])
-        except (requests.RequestException, RuntimeError) as exc:
-            print(f"[{label}] Error: {exc}", file=sys.stderr)
-            ok, history = False, state.get(label, [])
 
-        if ok and not dry_run:
+        def save_progress(history, label=label):
             state[label] = history
             save_state(state_path, state)
-        failures += 0 if ok else 1
+
+        try:
+            count, _ = post_to_channel(
+                session, channel, state.get(label, []), dry_run, auth,
+                None if dry_run else save_progress,
+            )
+        except WebhookError as exc:
+            print(f"[{label}] {exc}", file=sys.stderr)
+            count = 0
+        except (requests.RequestException, RuntimeError, ConfigError) as exc:
+            print(f"[{label}] Error: {exc}", file=sys.stderr)
+            count = 0
+        failures += 0 if count else 1
 
     if failures:
         print(f"\n{failures} de {len(channels)} canal(es) con errores.", file=sys.stderr)

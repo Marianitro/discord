@@ -1,7 +1,8 @@
 {
   "defaults": {
     "rating": "general,sensitive,questionable,explicit",
-    "max_upload_mb": 10
+    "max_upload_mb": 10,
+    "posts_per_run": 3
   },
   "channels": [
     {

@@ -5,8 +5,11 @@ de Discord mediante webhooks. Pensado para ejecutarse cada 5 minutos con
 GitHub Actions.
 
 Los canales se definen en `channels.json` (name, webhook_env, tags, rating,
-max_upload_mb, enabled). Las URLs de los webhooks van en secrets; cada canal
+enabled). Las URLs de los webhooks van en secrets; cada canal
 indica en `webhook_env` el nombre del secret.
+
+Cada mensaje lleva la imagen incrustada y un texto «Ver en Gelbooru» con el
+enlace oculto (no se sube ningún archivo adjunto).
 
 Variables de entorno
 --------------------
@@ -25,7 +28,6 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -39,7 +41,12 @@ VIDEO_EXTS = {"mp4", "webm"}
 MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS
 
 # En Gelbooru el rating se escribe con la palabra completa.
-RATINGS = {"g": "general", "s": "sensitive", "q": "questionable", "e": "explicit"}
+RATING_NAMES = {
+    "g": "general", "s": "sensitive", "q": "questionable", "e": "explicit",
+    "general": "general", "sensitive": "sensitive",
+    "questionable": "questionable", "explicit": "explicit",
+}
+ALL_RATINGS = ["general", "sensitive", "questionable", "explicit"]
 
 BATCH_SIZE = 40
 MAX_QUERIES = 3
@@ -71,7 +78,7 @@ def load_channels(path: Path) -> list[dict]:
     except ValueError as exc:
         raise ConfigError(f"{path} no es un JSON válido: {exc}")
 
-    defaults = {"rating": "g", "max_upload_mb": 10, "enabled": True}
+    defaults = {"rating": "g", "enabled": True}
     defaults.update(raw.get("defaults", {}))
 
     channels, names = [], set()
@@ -97,12 +104,35 @@ def load_channels(path: Path) -> list[dict]:
     return channels
 
 
+def rating_filters(value) -> list[str]:
+    """
+    Convierte "g", "s,q,e" o "general,sensitive" en filtros que Gelbooru entiende.
+    Gelbooru NO acepta listas con coma (rating:s,q,e) y repetir rating:x rating:y
+    daría 0 resultados, así que varios ratings se expresan excluyendo los que sobran:
+    "s,q,e" -> -rating:general   |   "g,s" -> -rating:questionable -rating:explicit
+    """
+    wanted: list[str] = []
+    for item in str(value or "").lower().replace(" ", "").split(","):
+        if not item:
+            continue
+        if item in ("any", "all", "none"):
+            return []
+        name = RATING_NAMES.get(item)
+        if not name:
+            raise ConfigError(f"Rating desconocido '{item}'. Usa g, s, q, e (o 'any').")
+        if name not in wanted:
+            wanted.append(name)
+    if not wanted or len(wanted) == len(ALL_RATINGS):
+        return []
+    if len(wanted) == 1:
+        return [f"rating:{wanted[0]}"]
+    return [f"-rating:{name}" for name in ALL_RATINGS if name not in wanted]
+
+
 def build_query(channel: dict) -> str:
     tags = str(channel.get("tags") or "").strip()
-    rating = str(channel.get("rating") or "").strip().lower()
     parts = [tags] if tags else []
-    if rating and rating not in ("any", "all", "none"):
-        parts.append(f"rating:{RATINGS.get(rating, rating)}")
+    parts += rating_filters(channel.get("rating"))
     parts.append("sort:random")
     return " ".join(parts)
 
@@ -202,38 +232,12 @@ def is_usable(post: dict) -> bool:
     return not post["deleted"] and bool(post["file_url"]) and post["file_ext"] in MEDIA_EXTS
 
 
-def download(url: str, max_bytes: int) -> Optional[bytes]:
-    """Descarga el archivo; devuelve None si supera max_bytes."""
-    with requests.get(url, headers={"User-Agent": USER_AGENT}, stream=True, timeout=120) as r:
-        r.raise_for_status()
-        buffer = bytearray()
-        for chunk in r.iter_content(chunk_size=1 << 16):
-            buffer.extend(chunk)
-            if len(buffer) > max_bytes:
-                return None
-        return bytes(buffer)
-
-
-def build_caption(post: dict) -> str:
-    # Los <> evitan que Discord genere una vista previa duplicada del enlace.
-    return f"<{GELBOORU}/index.php?page=post&s=view&id={post['id']}>"
-
-
 # --------------------------------------------------------------------------- #
 # Discord
 # --------------------------------------------------------------------------- #
-def send_to_discord(webhook_url, content, filename=None, data=None) -> requests.Response:
-    payload = {"content": content, "allowed_mentions": {"parse": []}}
+def send_to_discord(webhook_url: str, payload: dict) -> requests.Response:
     for _ in range(4):
-        if data is not None:
-            response = requests.post(
-                webhook_url, params={"wait": "true"},
-                data={"payload_json": json.dumps(payload)},
-                files={"files[0]": (filename, data)}, timeout=120,
-            )
-        else:
-            response = requests.post(webhook_url, params={"wait": "true"}, json=payload, timeout=30)
-
+        response = requests.post(webhook_url, params={"wait": "true"}, json=payload, timeout=30)
         if response.status_code == 429:
             try:
                 wait = float(response.json().get("retry_after", 2))
@@ -253,45 +257,43 @@ def check_webhook(response: requests.Response) -> None:
         )
 
 
-def publish(webhook_url: str, post: dict, max_bytes: int, dry_run: bool, label: str) -> bool:
-    post_id, ext = post["id"], post["file_ext"]
-    caption = build_caption(post)
+def md_url(url: str) -> str:
+    """Escapa lo que rompería un enlace Markdown [texto](url)."""
+    return url.replace(" ", "%20").replace("(", "%28").replace(")", "%29")
 
-    payload_file: Optional[tuple[str, bytes]] = None
-    content = download(post["file_url"], max_bytes)
-    if content is None and ext in IMAGE_EXTS and post["sample_url"]:
-        # Imagen demasiado pesada: se usa la versión reducida.
-        sample_ext = post["sample_url"].rsplit(".", 1)[-1].lower()
-        content, ext = download(post["sample_url"], max_bytes), sample_ext
-    if content is not None:
-        payload_file = (f"gelbooru_{post_id}.{ext}", content)
+
+def build_message(post: dict) -> dict:
+    """
+    Imágenes: embed con la imagen y debajo el texto «Ver en Gelbooru» (enlace al post).
+    Videos: un embed no puede reproducir video, así que se envía el enlace al archivo
+    oculto tras el mismo texto y Discord lo despliega como reproductor.
+    """
+    payload: dict = {"allowed_mentions": {"parse": []}}
+    if post["file_ext"] in IMAGE_EXTS:
+        page = f"{GELBOORU}/index.php?page=post&s=view&id={post['id']}"
+        payload["embeds"] = [{
+            "description": f"[Ver en Gelbooru]({md_url(page)})",
+            "image": {"url": post["file_url"]},
+        }]
+    else:
+        payload["content"] = f"[Ver en Gelbooru]({md_url(post['file_url'])})"
+    return payload
+
+
+def publish(webhook_url: str, post: dict, dry_run: bool, label: str) -> bool:
+    post_id = post["id"]
+    payload = build_message(post)
 
     if dry_run:
-        kind = (
-            f"archivo {payload_file[0]} ({len(payload_file[1]) / 1e6:.2f} MB)"
-            if payload_file else "solo enlace"
-        )
-        print(f"[{label}] [DRY_RUN] post #{post_id} → {kind}\n{caption}")
+        print(f"[{label}] [DRY_RUN] post #{post_id} ({post['file_ext']})\n{json.dumps(payload, ensure_ascii=False)}")
         return True
 
-    if payload_file:
-        response = send_to_discord(webhook_url, caption, payload_file[0], payload_file[1])
-        check_webhook(response)
-        if response.status_code == 413:
-            print(f"[{label}] Discord rechazó el archivo por tamaño (post #{post_id}); envío el enlace.")
-        elif not response.ok:
-            print(f"[{label}] Discord respondió {response.status_code}: {response.text[:300]}")
-            return False
-        else:
-            print(f"[{label}] Publicado post #{post_id} como archivo ({payload_file[0]}).")
-            return True
-
-    response = send_to_discord(webhook_url, f"{caption}\n{post['file_url']}")
+    response = send_to_discord(webhook_url, payload)
     check_webhook(response)
     if not response.ok:
         print(f"[{label}] Discord respondió {response.status_code}: {response.text[:300]}")
         return False
-    print(f"[{label}] Publicado post #{post_id} como enlace.")
+    print(f"[{label}] Publicado post #{post_id}.")
     return True
 
 
@@ -301,7 +303,6 @@ def publish(webhook_url: str, post: dict, max_bytes: int, dry_run: bool, label: 
 def post_to_channel(session, channel, history, dry_run, auth) -> tuple[bool, list[int]]:
     label = channel["name"]
     query = build_query(channel)
-    max_bytes = int(float(channel["max_upload_mb"]) * 1024 * 1024)
 
     webhook_url = env(channel["webhook_env"])
     if not webhook_url and not dry_run:
@@ -330,7 +331,7 @@ def post_to_channel(session, channel, history, dry_run, auth) -> tuple[bool, lis
                 break
             tried += 1
             try:
-                if publish(webhook_url, post, max_bytes, dry_run, label):
+                if publish(webhook_url, post, dry_run, label):
                     return True, (history + [post["id"]])[-MAX_HISTORY:]
             except requests.RequestException as exc:
                 print(f"[{label}] Fallo con el post #{post['id']}: {exc}")
@@ -344,7 +345,7 @@ def post_to_channel(session, channel, history, dry_run, auth) -> tuple[bool, lis
         print(f"[{label}] Ya se enviaron todos los posts disponibles; reinicio el historial.")
         for post in last_usable[:MAX_POSTS_TRIED]:
             try:
-                if publish(webhook_url, post, max_bytes, dry_run, label):
+                if publish(webhook_url, post, dry_run, label):
                     return True, [post["id"]]
             except requests.RequestException as exc:
                 print(f"[{label}] Fallo con el post #{post['id']}: {exc}")

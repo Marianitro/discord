@@ -7,9 +7,9 @@
     {
       "name": "canal-1",
       "webhook_env": "DISCORD_WEBHOOK_1",
-      "tags": "loli -scat"
-      "rating": "g",   
-      "enabled": true        
+      "tags": "loli -scat",
+      "rating": "g",
+      "enabled": true
     },
     {
       "name": "canal-2",

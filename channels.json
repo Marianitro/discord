@@ -7,14 +7,14 @@
     {
       "name": "canal-1",
       "webhook_env": "DISCORD_WEBHOOK_1",
-      "tags": "loli -scat",
+      "tags": "loli -guro -scat -dakimakura_(medium)",
       "rating": "questionable,explicit",
       "enabled": true
     },
     {
       "name": "canal-2",
       "webhook_env": "DISCORD_WEBHOOK_2",
-      "tags": "loli -scat",
+      "tags": "loli -guro -scat -dakimakura_(medium)",
       "rating": "general,sensitive",
       "enabled": true
     },

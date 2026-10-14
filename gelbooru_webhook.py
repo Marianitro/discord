@@ -236,10 +236,19 @@ def is_usable(post: dict) -> bool:
 
 
 def download(url: str, max_bytes: int) -> Optional[bytes]:
-    """Descarga el archivo; devuelve None si supera max_bytes o no se pudo bajar."""
+    """
+    Descarga el archivo; devuelve None si supera max_bytes, si falla o si el servidor
+    no devuelve una imagen/video (p. ej. una página HTML de bloqueo).
+    Se envía el Referer de Gelbooru porque su CDN suele rechazar descargas sin él.
+    """
+    headers = {"User-Agent": USER_AGENT, "Referer": f"{GELBOORU}/"}
     try:
-        with requests.get(url, headers={"User-Agent": USER_AGENT}, stream=True, timeout=120) as r:
+        with requests.get(url, headers=headers, stream=True, timeout=120) as r:
             r.raise_for_status()
+            ctype = (r.headers.get("content-type") or "").lower()
+            if not ctype.startswith(("image/", "video/")):
+                print(f"El servidor devolvió '{ctype or 'sin content-type'}' en vez de una imagen/video: {url}")
+                return None
             buffer = bytearray()
             for chunk in r.iter_content(chunk_size=1 << 16):
                 buffer.extend(chunk)

@@ -50,28 +50,28 @@
     {
       "name": "canal-7",
       "webhook_env": "DISCORD_WEBHOOK_7",
-      "tags": "highres -animated loli -shota stomach_bulge -guro -scat -dakimakura_(medium)",
+      "tags": "highres -animated real_life -yaoi -furry -loli -shota -guro -scat -dakimakura_(medium)",
       "rating": "explicit",
-      "enabled": false
+      "enabled": true
     },
     {
       "name": "canal-8",
       "webhook_env": "DISCORD_WEBHOOK_8",
-      "tags": "highres -animated loli -shota stomach_bulge -guro -scat -dakimakura_(medium)",
+      "tags": "highres animated real_life -yaoi -furry -loli -shota -guro -scat -dakimakura_(medium)",
       "rating": "explicit",
-      "enabled": false
+      "enabled": true
     },
     {
       "name": "canal-9",
       "webhook_env": "DISCORD_WEBHOOK_9",
-      "tags": "highres -animated -yaoi -furry -loli -shota -guro -scat -dakimakura_(medium)",
+      "tags": "highres -animated -real_life -yaoi -furry -loli -shota -guro -scat -dakimakura_(medium)",
       "rating": "explicit",
       "enabled": true
     },
     {
       "name": "canal-10",
       "webhook_env": "DISCORD_WEBHOOK_10",
-      "tags": "highres animated -yaoi -furry -loli -shota -guro -scat -dakimakura_(medium)",
+      "tags": "highres animated -real_life -yaoi -furry -loli -shota -guro -scat -dakimakura_(medium)",
       "rating": "explicit",
       "enabled": true
     }

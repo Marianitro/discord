@@ -64,14 +64,14 @@
     {
       "name": "canal-9",
       "webhook_env": "DISCORD_WEBHOOK_9",
-      "tags": "highres -animated -real_life -yaoi -furry -loli -shota -guro -scat -monochrome -pixel_art -dakimakura_(medium)",
+      "tags": "highres -animated -real_life -yaoi -furry -loli -shota -guro -scat -monochrome -pixel_art -ai-generated -dakimakura_(medium)",
       "rating": "explicit",
       "enabled": true
     },
     {
       "name": "canal-10",
       "webhook_env": "DISCORD_WEBHOOK_10",
-      "tags": "highres animated -3d -real_life -yaoi -furry -loli -shota -guro -scat -monochrome -pixel_art -dakimakura_(medium)",
+      "tags": "highres animated -3d -real_life -yaoi -furry -loli -shota -guro -scat -monochrome -pixel_art -ai-generated -dakimakura_(medium)",
       "rating": "explicit",
       "enabled": true
     }

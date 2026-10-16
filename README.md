@@ -26,17 +26,11 @@ a Discord. Cada canal tiene sus propios tags y recuerda lo que ya envió para no
 5. En la pestaña **Actions**, abre *Gelbooru a Discord* y pulsa **Run workflow** para
    probarlo. A partir de ahí se ejecuta solo.
 
-> No pegues la URL de un webhook en el código ni en `channels.json`: quien la tenga
-> puede publicar en tu canal. Úsala siempre como *secret*.
-
-> Si usaste la versión anterior: las variables `GELBOORU_TAGS`, `GELBOORU_RATING` y
-> `MAX_UPLOAD_MB` ya no se usan. Ahora esos valores van por canal en `channels.json`.
-
 ## Añadir otro canal con otros tags
 
 1. Crea el webhook del nuevo canal en Discord (paso 1 de arriba).
 2. Crea un secret nuevo con otro nombre, por ejemplo `DISCORD_WEBHOOK_2`.
-   El workflow ya tiene preparados `DISCORD_WEBHOOK_2` a `DISCORD_WEBHOOK_5`. Si
+   El workflow ya tiene preparados `DISCORD_WEBHOOK_10`. Si
    necesitas más, añade una línea por secret en el paso *Publicar en Discord* del
    archivo `.github/workflows/gelbooru.yml`.
 3. Añade el canal en `channels.json`:
@@ -67,31 +61,11 @@ sobrescribirlos. Cada ejecución publica **un post por canal**.
 
 1. Entra a tu perfil en <https://gelbooru.com/profile> y pulsa **Generate API key**.
 2. En el repositorio, ve a Settings → Secrets and variables → Actions → Secrets y crea:
-   - `GELBOORU_LOGIN`: tu nombre de usuario de Gelbooru.
+   - `GELBOORU_LOGIN`: tu id de usuario de Gelbooru.
    - `GELBOORU_API_KEY`: la clave generada.
 3. Lanza el workflow a mano y revisa el log: si todo va bien aparece
    `Gelbooru: sesión iniciada como <tu usuario> (<nivel>)`. Si las credenciales
    fallan, el log lo indica.
-
-La API key funciona como una contraseña: guárdala solo como *secret*.
-
-### Límite de tags: qué cambia según la cuenta
-
-Tener cuenta **no elimina el límite por sí solo**; depende del nivel:
-
-| Cuenta | Tags por búsqueda |
-|---|---|
-| Sin cuenta | 2 |
-| Member (gratuita) | 2 |
-| Gold | 6 |
-| Platinum / Builder | Sin límite |
-
-Gold y Platinum son mejoras de cuenta de pago. Con una cuenta gratuita sigues limitado
-a 2 tags, aunque iniciar sesión sí permite ver más contenido que sin cuenta, según los
-permisos del nivel.
-
-El filtro `rating` **no cuenta** para ese límite, así que con 2 tags puedes seguir
-filtrando por rating sin gastar ninguno.
 
 ## Historial de posts enviados
 
